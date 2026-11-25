@@ -229,34 +229,64 @@ async function isRealWord(word) {
 
 const currentPlayer = () => state.players[state.current];
 
+// A "source" says where a tile is right now:
+//   { from: "rack", index }  or  { from: "board", row, col }
+// takeTile() removes the tile from there and hands it back.
+function takeTile(source) {
+  if (source.from === "rack") return currentPlayer().rack.splice(source.index, 1)[0];
+  const tile = state.board[source.row][source.col];
+  state.board[source.row][source.col] = null;
+  state.pending = state.pending.filter(
+    (p) => !(p.row === source.row && p.col === source.col)
+  );
+  return tile;
+}
+
+function putOnBoard(tile, row, col) {
+  tile.locked = false;
+  state.board[row][col] = tile;
+  state.pending.push({ row, col, tile });
+}
+
 function selectRackTile(index) {
-  if (state.over || state.busy) return;
+  if (state.over || state.busy || justDragged) return;
   state.selected = state.selected === index ? null : index;
   render();
 }
 
 function clickCell(row, col) {
-  if (state.over || state.busy) return;
+  if (state.over || state.busy || justDragged) return;
   const cell = state.board[row][col];
 
-  // Clicking a tile you placed this turn sends it back to your rack.
   if (cell && !cell.locked) {
-    state.board[row][col] = null;
-    state.pending = state.pending.filter((p) => !(p.row === row && p.col === col));
-    currentPlayer().rack.push(cell);
-    render();
+    // Clicking a tile you placed this turn sends it back to your rack.
+    currentPlayer().rack.push(takeTile({ from: "board", row, col }));
+  } else if (!cell && state.selected !== null) {
+    // Clicking an empty square places the selected tile there.
+    putOnBoard(takeTile({ from: "rack", index: state.selected }), row, col);
+    state.selected = null;
+  } else {
     return;
   }
+  render();
+}
 
-  // Clicking an empty square places the selected tile there.
-  if (!cell && state.selected !== null) {
-    const tile = currentPlayer().rack.splice(state.selected, 1)[0];
-    tile.locked = false;
-    state.board[row][col] = tile;
-    state.pending.push({ row, col, tile });
-    state.selected = null;
-    render();
+// Called when a dragged tile is let go. The target is a board square
+// { to: "board", row, col }, a rack spot { to: "rack", index }, or
+// null if it was dropped somewhere that doesn't count.
+function dropTile(source, target) {
+  if (!target) return;
+  if (target.to === "board") {
+    if (state.board[target.row][target.col]) return; // square already taken
+    putOnBoard(takeTile(source), target.row, target.col);
+  } else {
+    // Dropped on the rack: put it back there, at the spot it landed on.
+    const rack = currentPlayer().rack;
+    const index = target.index ?? rack.length;
+    rack.splice(index, 0, takeTile(source));
   }
+  state.selected = null;
+  render();
 }
 
 function recallTiles() {
@@ -365,6 +395,100 @@ function endGame(finisher) {
 }
 
 
+// ---------- 5b. Drag and drop ----------------------------------------
+// Pointer events cover mouse, touch and pen with one set of code.
+// A press that moves less than DRAG_THRESHOLD pixels is left alone,
+// so it still counts as a normal click.
+
+const DRAG_THRESHOLD = 6;
+let drag = null;          // info about the drag in progress, or null
+let justDragged = false;  // stops the click that follows a drop
+
+function startDrag(event, source) {
+  if (state.over || state.busy || event.button !== 0) return;
+  drag = {
+    source,
+    el: event.currentTarget,
+    startX: event.clientX,
+    startY: event.clientY,
+    ghost: null,   // the floating copy that follows the pointer
+    hover: null,   // the board square currently highlighted
+  };
+  document.addEventListener("pointermove", moveDrag);
+  document.addEventListener("pointerup", endDrag);
+  document.addEventListener("pointercancel", cleanupDrag);
+}
+
+function moveDrag(event) {
+  // Only start dragging once the pointer has moved a little.
+  if (!drag.ghost) {
+    const distance = Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY);
+    if (distance < DRAG_THRESHOLD) return;
+    const rect = drag.el.getBoundingClientRect();
+    drag.ghost = drag.el.cloneNode(true);
+    drag.ghost.className = "tile ghost";
+    drag.ghost.style.width = rect.width + "px";
+    drag.ghost.style.height = rect.height + "px";
+    drag.ghost.style.fontSize = getComputedStyle(drag.el).fontSize;
+    document.body.appendChild(drag.ghost);
+    drag.el.classList.add("dragging");
+  }
+
+  drag.ghost.style.left = event.clientX + "px";
+  drag.ghost.style.top = event.clientY + "px";
+
+  // Highlight the empty square under the pointer.
+  const target = findDropTarget(event.clientX, event.clientY);
+  const cell = target && target.to === "board" ? target.el : null;
+  if (cell !== drag.hover) {
+    drag.hover?.classList.remove("drop-target");
+    cell?.classList.add("drop-target");
+    drag.hover = cell;
+  }
+}
+
+// Works out what is under the pointer. The ghost tile ignores the
+// pointer (see .ghost in style.css), so we see what's beneath it.
+function findDropTarget(x, y) {
+  const el = document.elementFromPoint(x, y);
+  if (!el) return null;
+  const cell = el.closest(".cell");
+  if (cell) {
+    const row = Number(cell.dataset.row);
+    const col = Number(cell.dataset.col);
+    if (state.board[row][col]) return null;
+    return { to: "board", row, col, el: cell };
+  }
+  if (el.closest("#rack-area")) {
+    const tile = el.closest("#rack .tile");
+    return { to: "rack", index: tile ? Number(tile.dataset.index) : undefined };
+  }
+  return null;
+}
+
+function endDrag(event) {
+  const wasDragging = drag.ghost !== null;
+  const source = drag.source;
+  const target = wasDragging ? findDropTarget(event.clientX, event.clientY) : null;
+  cleanupDrag();
+  if (wasDragging) {
+    justDragged = true;
+    setTimeout(() => (justDragged = false), 0);
+    dropTile(source, target);
+  }
+}
+
+function cleanupDrag() {
+  document.removeEventListener("pointermove", moveDrag);
+  document.removeEventListener("pointerup", endDrag);
+  document.removeEventListener("pointercancel", cleanupDrag);
+  drag.ghost?.remove();
+  drag.el.classList.remove("dragging");
+  drag.hover?.classList.remove("drop-target");
+  drag = null;
+}
+
+
 // ---------- 6. Drawing -----------------------------------------------
 
 function say(text, kind = "") {
@@ -409,10 +533,15 @@ function render() {
       const cell = document.createElement("div");
       const bonus = bonusAt(r, c);
       cell.className = "cell" + (bonus ? " " + bonus : "");
+      cell.dataset.row = r;
+      cell.dataset.col = c;
       const tile = state.board[r][c];
       if (tile) {
         const t = tileElement(tile);
         t.classList.add(tile.locked ? "locked" : "pending");
+        if (!tile.locked) {
+          t.addEventListener("pointerdown", (e) => startDrag(e, { from: "board", row: r, col: c }));
+        }
         cell.appendChild(t);
       } else if (r === CENTER && c === CENTER) {
         cell.classList.add("center");
@@ -431,7 +560,9 @@ function render() {
     currentPlayer().rack.forEach((tile, i) => {
       const t = tileElement(tile);
       if (i === state.selected) t.classList.add("selected");
+      t.dataset.index = i;
       t.addEventListener("click", () => selectRackTile(i));
+      t.addEventListener("pointerdown", (e) => startDrag(e, { from: "rack", index: i }));
       rack.appendChild(t);
     });
   }
