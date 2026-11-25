@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>LetterLoom</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <h1>LetterLoom</h1>
+    <p class="tagline">Weave words across the board. Two players, one screen.</p>
+  </header>
+
+  <main>
+    <!-- Scores and whose turn it is -->
+    <section id="scoreboard" aria-live="polite"></section>
+
+    <!-- The 13x13 board is drawn here by game.js -->
+    <section id="board" aria-label="Game board"></section>
+
+    <!-- The current player's tiles -->
+    <section id="rack-area">
+      <div id="rack" aria-label="Your tiles"></div>
+      <div id="controls">
+        <button id="btn-submit" class="primary">Play word</button>
+        <button id="btn-recall">Recall</button>
+        <button id="btn-shuffle">Shuffle</button>
+        <button id="btn-swap">Swap all</button>
+        <button id="btn-pass">Pass</button>
+      </div>
+      <label class="option">
+        <input type="checkbox" id="opt-dictionary" checked />
+        Check words with an online dictionary
+      </label>
+    </section>
+
+    <section id="message" aria-live="polite"></section>
+    <section id="log-area">
+      <h2>Move history</h2>
+      <ol id="log"></ol>
+      <button id="btn-new">New game</button>
+    </section>
+  </main>
+
+  <script src="game.js"></script>
+</body>
+</html>
